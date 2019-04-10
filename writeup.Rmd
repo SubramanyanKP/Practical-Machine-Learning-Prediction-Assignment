@@ -1,0 +1,234 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Subramanyan K P"
+date: "11 April 2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE,echo=TRUE,message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Practical Machine Learning Project : Prediction Assignment Writeup
+
+## I. Overview
+
+#### This document is the final report of the Peer Assessment project from Coursera's course Practical Machine Learning, as part of the Specialization in Data Science. It was built up in RStudio, using its knitr functions, meant to be published in html format.
+
+## II. Background
+
+#### One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+#### Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. In this project.
+
+## Goal:
+
+#### Our goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+#### Read more: http://groupware.les.inf.puc-rio.br/har#ixzz3xsbS5bVX
+
+## Dataset:
+
+#### The training and test data for this project are available here:
+
+#### Training Data: 
+#### https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+#### Test Data:
+#### https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+#### The data for this project come from http://groupware.les.inf.puc-rio.br/har.
+
+## Full source:
+#### Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. "Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13)". Stuttgart, Germany: ACM SIGCHI, 2013.
+
+#### My special thanks to the authors for being generous enough in allowing their data being used for this kind of an assignment.
+
+## A short description of the datasets content from the authors' website:
+
+#### "Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+#### Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg)."
+
+## III. Loading the required data and performing an exploratory analysis:
+
+### Environment Preparation:
+
+#### Let us first upload the R libraries that are necessary for the complete analysis.
+
+```{r include=TRUE,echo=TRUE,message=FALSE, warning=FALSE}
+rm(list=ls())                # free up memory for the download of the data sets
+library(knitr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(randomForest)
+library(corrplot)
+```
+
+## Data Loading and Cleaning:
+
+#### The next step is loading the dataset from the URL provided above. The training dataset is then partinioned into two parts to create a Training set (70% of the data) for the modeling process and a Test set (with the remaining 30%) for the validations. The testing dataset is not changed and will only be used for the quiz results generation.
+
+```{r include=TRUE,echo=TRUE,message=FALSE, warning=FALSE}
+# set the URL for the download
+UrlTrain <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+UrlTest  <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# download the datasets
+training <- read.csv(url(UrlTrain))
+testing  <- read.csv(url(UrlTest))
+
+# create a partition with the training dataset 
+inTrain  <- createDataPartition(training$classe, p=0.7, list=FALSE)
+TrainSet <- training[inTrain, ]
+TestSet  <- training[-inTrain, ]
+dim(TrainSet)
+dim(TestSet)
+```
+
+#### As can be seen from the datasets they contain 160 variables. Those variables have plenty of NA, which will reuire a cleanup with the cleaning procedures as below. The Near Zero variance (NZV) variables also needs to be removed along with the ID variables as well which we do not require for our analysis.
+
+```{r include=TRUE,echo=TRUE,message=FALSE, warning=FALSE}
+# remove variables with Nearly Zero Variance
+NZV <- nearZeroVar(TrainSet)
+TrainSet <- TrainSet[, -NZV]
+TestSet  <- TestSet[, -NZV]
+dim(TrainSet)
+dim(TestSet)
+
+# remove variables that are mostly NA
+All_NA    <- sapply(TrainSet, function(x) mean(is.na(x))) > 0.95
+TrainSet <- TrainSet[, All_NA==FALSE]
+TestSet  <- TestSet[, All_NA==FALSE]
+dim(TrainSet)
+dim(TestSet)
+
+# remove identification only variables (columns 1 to 5)
+TrainSet <- TrainSet[, -(1:5)]
+TestSet  <- TestSet[, -(1:5)]
+dim(TrainSet)
+dim(TestSet)
+
+```
+
+#### As can be seen above,With the cleaning procss the number of variables for the analysis have been reduced to 54 only.
+
+
+## IV. Correlation Analysis:
+
+#### Now, let us analyse the correlation among variables before proceeding to the modeling procedures.
+
+
+```{r include=TRUE,echo=TRUE,message=FALSE, warning=FALSE}
+corMatrix <- cor(TrainSet[, -54])
+corrplot(corMatrix, order = "FPC", method = "color", type = "lower", 
+         tl.cex = 0.3, tl.col = rgb(0, 0, 0))
+
+```
+
+#### The highly correlated variables are shown in dark colors in the above graph . 
+
+#### As a normal procedure,a PCA (Principal Components Analysis) could also be performed as pre-processing step on the given datasets.Nevertheless,this step need not be applied for this assignment as the correlations are quite few.
+
+## V. Prediction Model Building:
+
+#### We will be applying three methods to model the regressions in the Train dataset and the best one with higher accuracy when applied to the Test dataset will be used for the quiz predictions.
+
+#### The methods that we will deploy are: Random Forests, Decision Tree and Generalized Boosted Model, as described below.
+
+#### Let us plot a Confusion Matrix at the end of each analysis to better visualize the accuracy of the models.
+
+## Method 1: Random Forest
+
+```{r include=TRUE,echo=TRUE,message=FALSE, warning=FALSE}
+# model fit
+set.seed(12345)
+controlRF <- trainControl(method="cv", number=3, verboseIter=FALSE)
+modFitRandForest <- train(classe ~ ., data=TrainSet, method="rf",
+                          trControl=controlRF)
+modFitRandForest$finalModel
+
+# prediction on Test dataset
+predictRandForest <- predict(modFitRandForest, newdata=TestSet)
+confMatRandForest <- confusionMatrix(predictRandForest, TestSet$classe)
+confMatRandForest
+
+# plot matrix results
+plot(confMatRandForest$table, col = confMatRandForest$byClass, 
+     main = paste("Accuracy as per Random Forest Method =",
+                  round(confMatRandForest$overall['Accuracy'], 4)))
+```
+
+## Method 2: Decision Trees
+
+```{r include=TRUE,echo=TRUE,message=FALSE, warning=FALSE}
+# model fit
+set.seed(12345)
+modFitDecTree <- rpart(classe ~ ., data=TrainSet, method="class")
+fancyRpartPlot(modFitDecTree)
+
+# prediction on Test dataset
+predictDecTree <- predict(modFitDecTree, newdata=TestSet, type="class")
+confMatDecTree <- confusionMatrix(predictDecTree, TestSet$classe)
+confMatDecTree
+
+# plot matrix results
+plot(confMatDecTree$table, col = confMatDecTree$byClass, 
+     main = paste("Accuracy as per Decision Tree Method =",
+                  round(confMatDecTree$overall['Accuracy'], 4)))
+
+```
+
+## Method 3: Generalized Boosted Model
+
+```{r include=TRUE,echo=TRUE,message=FALSE, warning=FALSE}
+# model fit
+set.seed(12345)
+
+controlGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modFitGBM  <- train(classe ~ ., data=TrainSet, method = "gbm",
+                    trControl = controlGBM, verbose = FALSE)
+modFitGBM$finalModel
+
+# prediction on Test dataset
+predictGBM <- predict(modFitGBM, newdata=TestSet)
+confMatGBM <- confusionMatrix(predictGBM, TestSet$classe)
+confMatGBM
+
+# plot matrix results
+plot(confMatGBM$table, col = confMatGBM$byClass, 
+     main = paste("Accuracy as per GBM Method =", round(confMatGBM$overall['Accuracy'], 4)))
+
+```
+
+## VI. Final Outcome:
+
+### Applying the Selected Model to the Test Data
+
+#### Now, post deployment of three regression modeling methods, we see that the Random Forest model shows the highest accuracy level. Therefore, we will be applying Random Forest model on (testing dataset) to predict the 20 quiz results as shown below.
+
+```{r include=TRUE,echo=TRUE,message=FALSE, warning=FALSE}
+predictTEST <- predict(modFitRandForest, newdata=testing)
+predictTEST
+```
+
+#### Let us copy each of these results into seperate text files which will appear in our work directory so that we will be able to answer the submission quiz accurately.
+```{r include=TRUE,echo=TRUE,message=FALSE, warning=FALSE}
+# Write the results to a text file for submission
+pml_write_files = function(x){
+    n = length(x)
+    for(i in 1:n){
+        filename = paste0("problem_id_",i,".txt")
+        write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+    }
+}
+
+pml_write_files(predictTEST)
+
+```
+
+
